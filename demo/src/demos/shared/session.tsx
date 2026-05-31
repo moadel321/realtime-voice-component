@@ -7,11 +7,31 @@ import {
   type PropsWithChildren,
 } from "react";
 import {
+  createUltravoxTransport,
   createVoiceControlController,
   useVoiceControl,
   type UseVoiceControlOptions,
   type VoiceControlController,
 } from "realtime-voice-component";
+
+type VoiceProvider = "openai" | "ultravox";
+
+const ENV_PROVIDER = String(import.meta.env.VITE_VOICE_PROVIDER ?? "openai")
+  .trim()
+  .toLowerCase();
+const VOICE_PROVIDER: VoiceProvider = ENV_PROVIDER === "ultravox" ? "ultravox" : "openai";
+
+if (typeof window !== "undefined") {
+  // Surface the resolved provider in the dev console so misconfigured env vars
+  // are obvious. Hot module replacement re-evaluates this module on edit.
+  // eslint-disable-next-line no-console
+  console.info(`[demo] voice provider = ${VOICE_PROVIDER} (raw env: ${JSON.stringify(import.meta.env.VITE_VOICE_PROVIDER)})`);
+}
+
+const STATE_UPDATE_INSTRUCTION =
+  VOICE_PROVIDER === "ultravox"
+    ? " The host app sends authoritative state observations as deferred messages prefixed with [State update]. Treat them as ground truth about the current UI."
+    : "";
 
 type DemoSessionContextValue = {
   activeDemoIdRef: { current: string | null };
@@ -29,15 +49,31 @@ type SharedDemoControllerOptions = SharedDemoControllerBaseOptions & {
 
 const DemoSessionContext = createContext<DemoSessionContextValue | null>(null);
 
+const PROVIDER_OPTIONS = {
+  openai: {
+    auth: { sessionEndpoint: "/session" },
+    model: "gpt-realtime-1.5",
+  },
+  ultravox: {
+    auth: { sessionEndpoint: "/ultravox/call" },
+    model: "ultravox-v0.7",
+    transportFactory: () => createUltravoxTransport({ callEndpoint: "/ultravox/call" }),
+  },
+} as const satisfies Record<VoiceProvider, Partial<UseVoiceControlOptions>>;
+
 function buildBaseControllerOptions(
   options: SharedDemoControllerBaseOptions,
 ): UseVoiceControlOptions {
+  const instructions =
+    options.instructions !== undefined
+      ? options.instructions + STATE_UPDATE_INSTRUCTION
+      : undefined;
+
   return {
-    auth: { sessionEndpoint: "/session" },
     activationMode: "vad",
-    model: "gpt-realtime-1.5",
-    outputMode: "tool-only",
-    ...(options.instructions !== undefined ? { instructions: options.instructions } : {}),
+    outputMode: "text+audio",
+    ...PROVIDER_OPTIONS[VOICE_PROVIDER],
+    ...(instructions !== undefined ? { instructions } : {}),
     ...(options.postToolResponse !== undefined
       ? { postToolResponse: options.postToolResponse }
       : {}),

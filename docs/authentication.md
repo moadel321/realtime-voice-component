@@ -57,6 +57,38 @@ app.post("/session", async (request, response) => {
 });
 ```
 
+## Ultravox Transport
+
+When using `createUltravoxTransport`, the same `sessionEndpoint` shape is reused
+to identify a server-side proxy that issues Ultravox calls. Point it at your own
+`/ultravox/call` route:
+
+```tsx
+auth={{ sessionEndpoint: "/ultravox/call" }}
+```
+
+The proxy receives JSON, not multipart, and forwards the request to
+`POST https://api.ultravox.ai/api/calls` with your `X-API-Key` header. Return
+the JSON response (`{ joinUrl, callId }`) untouched. Example Node handler:
+
+```ts
+app.post("/ultravox/call", async (request, response) => {
+  const upstream = await fetch("https://api.ultravox.ai/api/calls", {
+    method: "POST",
+    headers: {
+      "X-API-Key": process.env.ULTRAVOX_API_KEY!,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ ...request.body, medium: { webRtc: {} } }),
+  });
+  response.status(upstream.status).type("application/json").send(await upstream.text());
+});
+```
+
+The browser never sees the Ultravox API key. See
+[`demo/ultravox-call-server.mjs`](../demo/ultravox-call-server.mjs) for the
+runnable reference.
+
 ## Legacy Compatibility
 
 The library still supports the older client-secret bootstrap paths:

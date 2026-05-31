@@ -6,6 +6,7 @@ import { defineConfig } from "vite";
 
 const sessionServerOrigin =
   process.env.DEMO_SESSION_ORIGIN ?? process.env.DEMO_TOKEN_ORIGIN ?? "http://localhost:3211";
+const ultravoxServerOrigin = process.env.DEMO_ULTRAVOX_ORIGIN ?? "http://localhost:3212";
 const demoRoot = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
@@ -30,6 +31,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/session": sessionServerOrigin,
+      "/ultravox/call": ultravoxServerOrigin,
     },
   },
   build: {

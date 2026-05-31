@@ -84,17 +84,13 @@ function loadLocalEnv(path) {
   }
 }
 
-function getPackageRunnerArgs(scriptName) {
-  if (process.env.npm_execpath) {
-    return {
-      command: process.execPath,
-      args: [process.env.npm_execpath, "run", scriptName],
-    };
-  }
-
+function getViteRunnerArgs() {
+  // Spawn Vite directly through Node. Going through `npm`/`pnpm`/`corepack` on
+  // Windows routes through cmd.exe and the parent loses the child's stdio,
+  // making the orchestrator look like it exited immediately.
   return {
-    command: process.platform === "win32" ? "npm.cmd" : "npm",
-    args: ["run", scriptName],
+    command: process.execPath,
+    args: ["node_modules/vite/bin/vite.js", "--config", "demo/vite.config.ts"],
   };
 }
 
@@ -113,12 +109,14 @@ function shutdown(signal) {
 }
 
 loadLocalEnv("demo/.env.local");
-const demoAppRunner = getPackageRunnerArgs("demo:app");
+const viteRunner = getViteRunnerArgs();
 
 spawnProcess(process.execPath, ["demo/session-server.mjs"]);
-spawnProcess(demoAppRunner.command, demoAppRunner.args, {
+spawnProcess(process.execPath, ["demo/ultravox-call-server.mjs"]);
+spawnProcess(viteRunner.command, viteRunner.args, {
   DEMO_SESSION_ORIGIN:
     process.env.DEMO_SESSION_ORIGIN ?? process.env.DEMO_TOKEN_ORIGIN ?? "http://localhost:3211",
+  DEMO_ULTRAVOX_ORIGIN: process.env.DEMO_ULTRAVOX_ORIGIN ?? "http://localhost:3212",
 });
 
 process.on("SIGINT", () => shutdown("SIGINT"));

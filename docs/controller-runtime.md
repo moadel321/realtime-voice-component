@@ -97,6 +97,34 @@ Important controller behavior:
 - it surfaces runtime failures as normalized voice-control errors
 - it can auto-connect when `autoConnect` is set
 
+## Swapping Transports
+
+The controller talks to OpenAI Realtime by default but is transport-agnostic.
+Pass `transportFactory` in the options to swap in another provider:
+
+```tsx
+import { createUltravoxTransport, createVoiceControlController } from "realtime-voice-component";
+
+createVoiceControlController({
+  auth: { sessionEndpoint: "/ultravox/call" },
+  model: "ultravox-v0.7",
+  transportFactory: () => createUltravoxTransport(),
+  tools,
+  instructions,
+});
+```
+
+The Ultravox transport (`src/transport/ultravoxRealtimeTransport.ts`) uses the
+`ultravox-client` SDK under the hood. It translates Ultravox's data-message
+protocol into the OpenAI-Realtime-shaped events the controller already decodes,
+so existing `defineVoiceTool(...)` definitions and the rest of the runtime work
+unchanged. See [Authentication](./authentication.md) for the matching server
+proxy. `ultravox-client` is an optional peer dependency — install it in your
+app when you choose this path.
+
+Custom transports can do the same by implementing `RealtimeTransport` from
+`src/transport/types.ts`.
+
 ## Tool Execution Model
 
 When the model emits function calls, the controller:

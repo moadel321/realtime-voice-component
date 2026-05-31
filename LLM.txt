@@ -23,6 +23,25 @@ Use this default integration unless the host app has a strong reason not to:
 - `interruptResponse: false` for text/tool-only VAD sessions so new speech does
   not cancel an in-flight text response or function call
 
+Alternative model: Ultravox v0.7
+
+The library ships an optional `createUltravoxTransport()` that swaps OpenAI
+Realtime for Ultravox v0.7. Ultravox is a hosted speech-native model with
+client-implemented tool calling, currently priced at ~$0.05/min including TTS
+(roughly 6× cheaper than OpenAI Realtime). To use it:
+
+- install `ultravox-client` as a peer dep alongside this package
+- add a `/ultravox/call` proxy on your backend that POSTs to
+  `https://api.ultravox.ai/api/calls` with your `X-API-Key` header
+- pass `transportFactory: () => createUltravoxTransport({ callEndpoint: "/ultravox/call" })`
+  and `model: "ultravox-v0.7"` into `createVoiceControlController(...)`
+- tools defined with `defineVoiceTool` keep working unchanged — the transport
+  translates them into Ultravox's `temporaryTool { client: {} }` shape
+
+The OpenAI path remains the default. See `demo/ultravox-call-server.mjs` for
+the proxy reference and `src/transport/ultravoxRealtimeTransport.ts` for the
+transport implementation.
+
 Step 1: install the package
 
 ```bash

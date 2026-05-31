@@ -6,6 +6,10 @@ export { useVoiceControl } from "./useVoiceControl";
 export { useGhostCursor } from "./useGhostCursor";
 export { VoiceControlWidget } from "./components/VoiceControlWidget";
 export { createVoiceControlController } from "./voiceControlController";
+export {
+  createUltravoxTransport,
+  type UltravoxTransportOptions,
+} from "./transport/ultravoxRealtimeTransport";
 export type {
   ActivationMode,
   GhostCursorEasing,

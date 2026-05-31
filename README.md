@@ -1,104 +1,209 @@
-# realtime-voice-component
+# realtime voice component
 
-React/browser voice controls for tool-constrained UIs built on OpenAI Realtime.
+react/browser voice controls for tool-constrained uis, built on openai realtime.
 
-> Warning
-> This repository is an open-source reference implementation. It is useful for
-> education, demos, and local adoption, but it is not a promise of long-term
-> product support or a production-ready UI kit.
+this is a small library, not a framework. your app defines the exact actions a
+voice assistant can take, the assistant calls those actions as tools, and your
+ui stays in charge of the visible state change. there is a react controller, an
+optional launcher widget, and an optional ghost-cursor overlay for visible
+confirmation.
 
-## Distribution Status
+the package is published as `realtime-voice-component`. it is an open-source
+reference implementation under apache-2.0. it is not on npm and `package.json`
+stays private. treat it as something to read, run, and adapt, not as a
+long-term supported ui kit.
 
-This repo is intended to be shared as a GitHub reference implementation. It is
-not currently published to npm, and `package.json` remains marked as private.
+## why this exists
 
-The code is licensed under Apache-2.0. See [`LICENSE`](./LICENSE).
+raw realtime gives you a transport and a session. that is the right tool when
+you want custom audio, a non-react runtime, or your own ui from scratch.
 
-## What This Package Is
+but a lot of apps want something narrower. let the user talk, have the model
+call a few app-owned actions, and keep the app as the source of truth. doing
+that by hand means handling the sdp exchange, session config, tool-call
+plumbing, transcript assembly, and connection lifecycle every single time.
 
-This package is for apps where:
+this package does that part once. it keeps the cascaded realtime stack and wraps
+it in a controller you drive from react, so your time goes to the tools and the
+ui instead of the transport.
 
-- your app defines the exact actions the assistant can take
-- tools stay app-owned and narrow
-- the UI remains responsible for the visible state change
-- you want a React-friendly controller and an optional launcher widget
+## what it's for
 
-The package is intentionally opinionated about browser UI flows. It is not a
-general-purpose orchestration framework and it is not a replacement for raw
-Realtime transports.
+reach for this when:
 
-## Choose The Right Layer
+- your app owns the actions and wants them to stay narrow
+- the ui, not the model, performs the visible change
+- you want a react-friendly controller and an optional launcher widget
+- one or two tools map cleanly onto real app handlers
 
-Use this package when you want a React/browser layer for voice-driven UI:
+reach for something else when:
 
-- a reusable controller with React bindings
-- a packaged launcher widget
-- optional visible confirmation via the ghost cursor
-- a pattern centered on app-owned tools, not free-form browser automation
+- you need custom audio or a non-react runtime, use raw realtime
+- you need agent orchestration, handoffs, or hosted-tool and mcp flows, use
+  [`openai-agents-js`](https://github.com/openai/openai-agents-js)
 
-Use raw Realtime when you want lower-level transport and session control:
+## how it fits together
 
-- custom audio handling
-- non-React runtimes
-- your own UI surface and state model from scratch
+the flow is the normal realtime loop, with your app owning both ends.
 
-Use [`openai-agents-js`](https://github.com/openai/openai-agents-js) when you
-need a broader headless SDK:
-
-- agent orchestration and handoffs
-- richer hosted-tool and MCP flows
-- server-side or multi-runtime agent systems beyond a browser UI package
-
-## Demo App
-
-The repo’s [`demo/`](./demo) app is the main runnable teaching surface. It
-shows:
-
-- a starter theme-switching flow
-- a multi-step form flow
-- a richer shared-state chess flow
-- shared controller reuse across multiple screens
-- optional wake-word experimentation layered on top of the runtime
-
-Run it locally with:
-
-```bash
-cp demo/.env.example demo/.env.local
-# edit demo/.env.local and set OPENAI_API_KEY
-npm install
-npm run demo
+```text
+mic -> webrtc -> openai realtime -> tool call -> your app handler -> ui update
+                                              -> state sync back into the session
 ```
 
-## Package Shape
+the browser never talks to openai directly. it posts its sdp offer and session
+config to a `/session` endpoint you own, and your server forwards that to the
+realtime api with your key.
 
-- `defineVoiceTool()` turns a Zod-backed app action into a Realtime function
-  tool.
+```text
+browser  --sdp + session config-->  your /session  --forwards-->  api.openai.com
+         <----- answer sdp --------                 <-- answer ---
+```
+
+## package shape
+
+- `defineVoiceTool()` turns a zod-backed app action into a realtime function
+  tool. plain json schema is rejected on purpose. zod is required.
 - `createVoiceControlController()` owns the session, transport, tool execution,
-  transcript assembly, and connection lifecycle.
-- `useVoiceControl()` binds React to either an external controller or an
-  internally owned one.
-- `VoiceControlWidget` is a launcher UI on top of the controller.
-- `useGhostCursor()` and `GhostCursorOverlay` are optional visible confirmation
-  helpers.
+  transcript assembly, and connection lifecycle. it is plain typescript with no
+  react dependency.
+- `useVoiceControl()` binds react to a controller. pass options and the hook
+  owns creation and teardown. pass a controller and your app owns its lifecycle.
+- `VoiceControlWidget` is a launcher ui on top of the controller. keep it thin.
+- `useGhostCursor()` and `GhostCursorOverlay` are optional visible-confirmation
+  helpers for tool calls.
+- `createUltravoxTransport()` swaps the openai transport for ultravox v0.7
+  without touching your tools. see below.
 
-## Recommended Default Flow
+## the /session proxy
 
-For most browser apps in this repo, the recommended path is:
+add one route to your app backend. it forwards the browser's multipart body to
+`POST https://api.openai.com/v1/realtime/calls` and returns the answer sdp. keep
+the body intact unless you mean to override session settings.
 
-1. proxy the browser SDP + session config through your own `/session` endpoint
-2. register one narrow tool that maps to one real app action
-3. start with the theme demo or a small controller-based integration
-4. send current UI state back into the session after visible changes
+```ts
+app.post("/session", async (request, response) => {
+  const contentType = request.header("content-type");
 
-## Turn Detection Defaults
+  const realtimeResponse = await fetch("https://api.openai.com/v1/realtime/calls", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      ...(contentType ? { "Content-Type": contentType } : {}),
+    },
+    body: request,
+    duplex: "half",
+  });
 
-The controller uses Realtime `server_vad` by default. For text and tool-only
-sessions, it also sets `interrupt_response: false` so new speech does not cancel
-an in-flight text response or tool call. That matters when your UI does not play
-assistant audio back to the user.
+  response
+    .status(realtimeResponse.status)
+    .type(realtimeResponse.headers.get("content-type") ?? "application/sdp")
+    .send(await realtimeResponse.text());
+});
+```
 
-If you override `audio.input.turnDetection`, use a server VAD shape like this as
-the starting point for tool-only UI control:
+the key never reaches the browser. the demo's `demo/session-server.mjs` is a
+~60-line version of exactly this route.
+
+## defining a tool and a controller
+
+tools call your app handlers, and handlers do the real work. a tool's
+`execute()` should not become a second business-logic layer.
+
+```tsx
+const tools = [
+  defineVoiceTool({
+    name: "set_prompt",
+    description: "Replace the current prompt.",
+    parameters: z.object({ prompt: z.string().min(1) }),
+    execute: ({ prompt }) => {
+      app.setPrompt(prompt);
+      return { ok: true, prompt };
+    },
+  }),
+];
+
+const controller = createVoiceControlController({
+  activationMode: "vad",
+  auth: { sessionEndpoint: "/session" },
+  instructions:
+    "Use the provided tools to control the current screen. Prefer tools over free-form responses.",
+  outputMode: "tool-only",
+  tools,
+});
+```
+
+bind it in react. if you pass the controller in, your app owns `destroy()`.
+
+```tsx
+const runtime = useVoiceControl(controller);
+// ...
+<VoiceControlWidget controller={controller} snapToCorners />;
+```
+
+## swapping in ultravox
+
+the controller is transport-agnostic. `createUltravoxTransport()` runs the same
+tool-call shape on [ultravox v0.7](https://ultravox.ai), a hosted speech-native
+model, at roughly 6x lower cost. your `defineVoiceTool(...)` definitions and the
+rest of the runtime stay the same.
+
+```tsx
+import { createUltravoxTransport, createVoiceControlController } from "realtime-voice-component";
+
+createVoiceControlController({
+  auth: { sessionEndpoint: "/ultravox/call" },
+  model: "ultravox-v0.7",
+  transportFactory: () => createUltravoxTransport({ callEndpoint: "/ultravox/call" }),
+  tools,
+  instructions,
+});
+```
+
+the matching server route forwards to `POST https://api.ultravox.ai/api/calls`
+with your `ULTRAVOX_API_KEY` and returns the call's `joinUrl`.
+
+```text
+browser  --call config-->  your /ultravox/call  --forwards-->  api.ultravox.ai
+         <----- joinUrl ---                       <-- joinUrl --
+browser  <========== webrtc audio + data ==========>  ultravox call
+```
+
+under the hood the transport translates ultravox's data-message protocol into
+the openai-realtime-shaped events the controller already decodes, so your tools
+do not know the difference. `ultravox-client` is an optional peer dependency,
+install it only when you take this path. `demo/ultravox-call-server.mjs` is the
+matching proxy, and
+[docs/controller-runtime.md](./docs/controller-runtime.md#swapping-transports)
+plus [docs/authentication.md](./docs/authentication.md) cover the rest.
+
+## demo app
+
+`demo/` is the main runnable teaching surface. it shows a theme-switch flow, a
+multi-step form, a shared-state chess flow, one controller reused across
+screens, and optional wake-word experimentation on top.
+
+```powershell
+Copy-Item demo\.env.example demo\.env.local
+# edit demo\.env.local and set OPENAI_API_KEY (and ULTRAVOX_API_KEY for ultravox)
+corepack pnpm install
+corepack pnpm demo
+```
+
+`corepack pnpm demo` starts the `/session` proxy (port 3211), the
+`/ultravox/call` proxy (port 3212), and the vite dev server together. set
+`VITE_VOICE_PROVIDER=ultravox` in `demo\.env.local` to run the same demos
+against ultravox instead of openai.
+
+## turn detection defaults
+
+the controller uses realtime `server_vad` by default. for text and tool-only
+sessions it also sets `interrupt_response: false`, so a stray utterance does not
+cancel an in-flight text response or tool call. that matters when your ui does
+not play assistant audio back to the user.
+
+if you override `audio.input.turnDetection`, this server-vad shape is a good
+starting point for tool-only ui control.
 
 ```ts
 {
@@ -111,329 +216,74 @@ the starting point for tool-only UI control:
 }
 ```
 
-## Integrating With An Existing App
+other defaults worth knowing: model `gpt-realtime-1.5`, activation mode `vad`,
+and a strong lean toward `tool-only` output for ui control.
 
-The most reliable retrofit pattern is:
+## integrating with an existing app
 
-- keep your app as the source of truth
-- create one explicit controller for one voice surface
-- put a small app-owned wrapper between tools and your real handlers
-- keep the widget launcher-focused
+the reliable retrofit pattern is small and boring on purpose.
 
-In practice, this avoids most of the confusing failure modes we hit while
-integrating the package into a larger app.
+1. keep your app as the source of truth.
+2. add the `/session` route above.
+3. put a small app-owned adapter between tools and your real handlers, with
+   methods like `getState()`, `setPrompt()`, and `startRun()`.
+4. register narrow tools against that adapter, one tool per real action.
+5. create the controller at the layer that owns the voice surface. that is one
+   screen, or a shell/provider if the same session must survive route changes.
+6. if you pass an external controller into `useVoiceControl(controller)` or
+   `VoiceControlWidget`, that same layer owns `destroy()`.
+7. after a visible change, send current ui state back into the session so the
+   model stays grounded in what is actually on screen.
 
-Before you wire anything, choose ownership:
+two things that cost real debugging time:
 
-- single-screen ownership: the controller belongs to one screen and can be
-  created with that screen's tools immediately
-- shared shell or provider ownership: the controller lives above scene-level UI
-  because the same session should stay alive across scene, tab, or route changes
+- do not destroy an externally owned controller from a leaf component cleanup.
+  react strict-mode remounts can leave a mounted widget holding a dead
+  controller that silently never connects.
+- if the widget stays at `idle` and never hits `/session`, suspect controller
+  ownership and browser media/webrtc support before blaming the backend.
 
-That choice affects where the controller lives, whether `tools` are known at
-creation time, and whether a neutral bootstrap controller is the right shape.
+prefer stable tool definitions. if a tool only needs the latest state, read it
+through a ref or selector instead of rebuilding the whole tool set every render.
+[docs/integrating-with-an-existing-app.md](./docs/integrating-with-an-existing-app.md)
+walks through the full version.
 
-### Step-by-Step Guide
+## local install
 
-1. **Install the package like a normal app dependency.**
-   Use your package manager to install `realtime-voice-component` from the
-   local checkout path and import `realtime-voice-component/styles.css` from
-   your app. Prefer a normal dependency install over reaching directly into the
-   package source tree from your app.
+this repo is optimized for local open-source use, not an npm release. install it
+into another app from a local checkout.
 
-2. **Add a `/session` endpoint in your app backend.**
-   Have the browser send SDP plus session config to your app server, and have
-   your server forward that request to `POST https://api.openai.com/v1/realtime/calls`.
-   Keep the multipart body intact unless you intentionally need to override
-   session settings.
-
-   Example:
-
-   ```ts
-   app.post("/session", async (request, response) => {
-     const contentType = request.header("content-type");
-
-     const realtimeResponse = await fetch("https://api.openai.com/v1/realtime/calls", {
-       method: "POST",
-       headers: {
-         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-         ...(contentType ? { "Content-Type": contentType } : {}),
-       },
-       body: request,
-       duplex: "half",
-     });
-
-     response
-       .status(realtimeResponse.status)
-       .type(realtimeResponse.headers.get("content-type") ?? "application/sdp")
-       .send(await realtimeResponse.text());
-   });
-   ```
-
-3. **Create a small app-owned voice wrapper.**
-   Build a wrapper or adapter around your existing app state and handlers.
-   Good wrapper methods are things like:
-   - `getState()`
-   - `setPrompt()`
-   - `setScenario()`
-   - `startRun()`
-   - `stopRun()`
-   - `sendToast()`
-
-   Example:
-
-   ```tsx
-   const stateRef = useRef({
-     prompt,
-     runStatus,
-     scenarioId,
-   });
-   stateRef.current = {
-     prompt,
-     runStatus,
-     scenarioId,
-   };
-
-   const voiceAdapter = useMemo(
-     () => ({
-       getState: () => stateRef.current,
-       sendToast: (message: string) => {
-         toast(message);
-       },
-       setPrompt,
-       setScenario: setScenarioId,
-       startRun,
-       stopRun,
-     }),
-     [setPrompt, setScenarioId, startRun, stopRun],
-   );
-   ```
-
-   Prefer refs or stable selectors when a tool needs the latest state at call
-   time. Avoid rebuilding every tool definition on every state change just to
-   read current values.
-
-   The `useMemo` calls in this pattern are about referential stability, not
-   generic optimization. If your wrapper object or tool array changes identity
-   every render, `controller.configure(...)` will also rerun every render.
-
-4. **Register narrow tools against the wrapper.**
-   Tools should call wrapper methods, and wrapper methods should call your real
-   app logic. Do not let tool `execute()` become a second business-logic layer.
-
-   Example:
-
-   ```tsx
-   const tools = useMemo(
-     () => [
-       defineVoiceTool({
-         name: "get_screen_state",
-         description: "Inspect the current app state before acting.",
-         parameters: z.object({}),
-         execute: () => ({
-           ok: true,
-           state: voiceAdapter.getState(),
-         }),
-       }),
-       defineVoiceTool({
-         name: "set_prompt",
-         description: "Replace the current prompt.",
-         parameters: z.object({
-           prompt: z.string().min(1),
-         }),
-         execute: ({ prompt }) => {
-           voiceAdapter.setPrompt(prompt);
-           return { ok: true, prompt };
-         },
-       }),
-       defineVoiceTool({
-         name: "start_run",
-         description: "Start the current run.",
-         parameters: z.object({}),
-         execute: async () => {
-           await voiceAdapter.startRun();
-           return { ok: true };
-         },
-       }),
-       defineVoiceTool({
-         name: "send_message",
-         description: "Show a short operator-facing message.",
-         parameters: z.object({
-           message: z.string().min(1),
-         }),
-         execute: ({ message }) => {
-           voiceAdapter.sendToast(message);
-           return { ok: true };
-         },
-       }),
-     ],
-     [voiceAdapter],
-   );
-   ```
-
-5. **Hoist the controller at the layer that owns the voice surface.**
-   If a screen, route shell, or provider owns the voice-enabled surface, create
-   the controller there. If you pass an external controller into
-   `useVoiceControl(controller)` or `VoiceControlWidget`, your app owns that
-   controller's lifecycle.
-
-   Example:
-
-   ```tsx
-   const [controller] = useState(() =>
-     createVoiceControlController({
-       activationMode: "vad",
-       auth: { sessionEndpoint: "/session" },
-       instructions:
-         "Use the provided tools to control the current screen. Prefer tools over free-form responses.",
-       outputMode: "tool-only",
-       tools,
-     }),
-   );
-   ```
-
-   Initializing with the current `tools` avoids the confusing “empty controller
-   first, tools later” shape in docs. You should still resync the external
-   controller when the tool set changes.
-
-   If your app owns a controller above screen-level tools, a neutral bootstrap
-   is still valid. The shared demo session in this repo starts with `tools: []`
-   and reconfigures as each demo screen becomes active. Use that shape only when
-   the controller genuinely exists before the final tool set does or when the
-   same session needs to survive scene changes.
-
-6. **Use an Effect only to sync the external controller.**
-   It is appropriate to call `controller.configure(...)` from `useEffect`
-   because the controller is an external object, not React state. Do not use
-   Effects to mirror React state into more React state.
-
-   Example:
-
-   ```tsx
-   useEffect(() => {
-     controller.configure({
-       activationMode: "vad",
-       auth: { sessionEndpoint: "/session" },
-       instructions:
-         "Use the provided tools to control the current screen. Prefer tools over free-form responses.",
-       outputMode: "tool-only",
-       tools,
-     });
-   }, [controller, tools]);
-   ```
-
-7. **Mount `VoiceControlWidget` as a launcher, not as your state model.**
-   The widget should stay thin. If you want visible confirmation, add
-   `GhostCursorOverlay`, but keep real state changes inside your app handlers.
-
-   Example:
-
-   ```tsx
-   return (
-     <>
-       <GhostCursorOverlay state={cursorState} />
-       <VoiceControlWidget controller={controller} snapToCorners />
-     </>
-   );
-   ```
-
-   Only call `useVoiceControl(controller)` in the parent component if that
-   component actually needs to render runtime state like `connected`,
-   `activity`, or tool-call history. `VoiceControlWidget` already binds to the
-   controller internally.
-
-   When the integration gets larger, split it into explicit files instead of
-   leaving everything in one screen component. A good default shape is:
-
-   ```text
-   voice/
-     voiceAdapter.ts
-     voiceTools.ts
-     useScreenVoiceController.ts
-     VoicePanel.tsx
-   ```
-
-   Keep the adapter, tools, controller wiring, and panel UI separate. The demo
-   code in this repo follows that same general pattern.
-
-8. **Send app state back into the session after visible changes.**
-   If the model needs fresh context, push current app state back into the
-   session so the model stays grounded in what is actually on screen.
-
-9. **Debug in this order.**
-   - If the widget stays at `idle` and never hits `/session`, inspect controller
-     ownership, widget mounting, and browser media/WebRTC support first.
-   - If the widget moves to `error` before `/session`, inspect the browser
-     console and permission/support issues first.
-   - If `/session` is hit and fails, then debug backend proxying, auth, and the
-     Realtime API response.
-
-### Integration Gotchas We Learned
-
-- Do not destroy an externally owned controller from a leaf component cleanup.
-  In React development mode and Strict Mode, remounts can leave a mounted
-  widget holding a dead controller that silently never connects.
-- If the widget never leaves `idle`, the problem may still be entirely on the
-  client side even when your `/session` route is healthy.
-- The widget is only a launcher. If your interaction model needs richer capture
-  controls, transcript UI, or a more opinionated surface, build custom UI on
-  top of the controller instead.
-
-## State Management Lessons
-
-The cleanest integrations treat the app as the source of truth and the voice
-runtime as a constrained caller into that state.
-
-- let your app own the real state change; tools should call app handlers rather
-  than trying to simulate state locally inside the voice layer
-- use one explicit controller for one voice surface; if multiple controls or
-  screens are really part of the same surface, reuse the same controller
-- if you pass an external controller into `useVoiceControl(controller)` or
-  `VoiceControlWidget`, your app owns that controller's lifecycle
-- be careful with React development remounts and Strict Mode cleanup; destroying
-  an externally owned controller from a leaf component cleanup can leave the
-  mounted widget holding a dead controller that silently never connects
-- prefer stable tool definitions; if a tool only needs the latest state, read it
-  through refs or stable selectors instead of rebuilding the whole tool set on
-  every state change
-- use `useMemo` here for identity stability when a wrapper object or tool array
-  feeds controller configuration, not as a blanket performance rule
-- if you want the hook to own creation and teardown, prefer
-  `useVoiceControl(options)` instead of manually creating a controller
-- if the widget stays at `idle` and never hits your `/session` endpoint, inspect
-  controller lifecycle and browser media support before assuming the backend is
-  broken
-
-In practice, the most reliable pattern is:
-
-1. create or hoist the controller at the app layer that actually owns the voice
-   surface
-2. pass app state into tool execution and state-sync messages
-3. let the widget stay thin and launcher-focused
-4. keep teardown decisions at the same layer that created the controller
-
-## Local Install
-
-This repo is still optimized for local open-source use rather than npm release
-readiness.
-
-Install it from a local checkout:
-
-```bash
-npm install ../path/to/realtime-voice-component zod
+```powershell
+pnpm add ../path/to/realtime-voice-component zod
+pnpm add ultravox-client   # only if you use the ultravox transport
 ```
 
-Then import from `realtime-voice-component` and
+then import from `realtime-voice-component` and
 `realtime-voice-component/styles.css`.
 
-## Docs
+## docs
 
-- [Docs overview](./docs/README.md)
-- [Getting started](./docs/getting-started.md)
-- [Integrating with an existing app](./docs/integrating-with-an-existing-app.md)
-- [Architecture choices](./docs/architecture-choices.md)
-- [Controller and runtime](./docs/controller-runtime.md)
-- [Widget and ghost cursor](./docs/widget-and-cursor.md)
-- [Authentication](./docs/authentication.md)
-- [Showcase demo architecture](./docs/demo-architecture.md)
-- [API reference](./docs/api-reference.md)
+- [docs overview](./docs/README.md)
+- [getting started](./docs/getting-started.md)
+- [integrating with an existing app](./docs/integrating-with-an-existing-app.md)
+- [architecture choices](./docs/architecture-choices.md)
+- [controller and runtime](./docs/controller-runtime.md)
+- [widget and ghost cursor](./docs/widget-and-cursor.md)
+- [authentication](./docs/authentication.md)
+- [showcase demo architecture](./docs/demo-architecture.md)
+- [api reference](./docs/api-reference.md)
+
+## current limits
+
+- the widget is a launcher, not a full ui. if you need richer capture controls,
+  a transcript surface, or a more opinionated layout, build on the controller
+  directly.
+- this is browser-first. there is no server-side or non-react runtime story.
+- it is a reference implementation, not a supported product. apis and defaults
+  can change, and you should expect to read the source while adopting it.
+- the ultravox transport covers the tool-call path the controller uses, not
+  every openai realtime feature.
+
+## license
+
+apache-2.0. see [LICENSE](./LICENSE).
